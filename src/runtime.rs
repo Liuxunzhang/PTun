@@ -30,9 +30,9 @@ mod linux_runtime {
         diagnostics, linux,
     };
 
-    const TUN_ADDR: Ipv4Addr = Ipv4Addr::new(198, 18, 0, 1);
-    const TUN_DST: Ipv4Addr = Ipv4Addr::new(198, 18, 0, 2);
-    const TUN_NETMASK: Ipv4Addr = Ipv4Addr::new(255, 254, 0, 0);
+    const TUN_ADDR: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 33);
+    const TUN_GATEWAY: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 1);
+    const TUN_NETMASK: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 0);
 
     pub fn run(args: &RunArgs, config: &EffectiveConfig) -> anyhow::Result<()> {
         diagnostics::validate_config(config)?;
@@ -187,7 +187,7 @@ mod linux_runtime {
     fn setup_target_namespace(config: &EffectiveConfig, proxy: &ArgProxy) -> anyhow::Result<i32> {
         let tun_fd = create_tun(config)?;
         run_ip(["link", "set", "lo", "up"])?;
-        run_ip(["addr", "replace", "198.18.0.1/15", "dev", &config.tun_name])?;
+        run_ip(["addr", "replace", "10.0.0.33/24", "dev", &config.tun_name])?;
         run_ip(["link", "set", "dev", &config.tun_name, "up"])?;
         run_ip(["route", "replace", "default", "dev", &config.tun_name])?;
 
@@ -203,7 +203,7 @@ mod linux_runtime {
         tun_config
             .tun_name(&config.tun_name)
             .address(IpAddr::V4(TUN_ADDR))
-            .destination(IpAddr::V4(TUN_DST))
+            .destination(IpAddr::V4(TUN_GATEWAY))
             .netmask(IpAddr::V4(TUN_NETMASK))
             .mtu(config.mtu)
             .up();
@@ -262,7 +262,7 @@ mod linux_runtime {
             .tun_fd(Some(tun_fd))
             .close_fd_on_drop(true)
             .setup(false)
-            .dns(ArgDns::Virtual)
+            .dns(ArgDns::OverTcp)
             .ipv6_enabled(config.ipv6);
         args.mtu = config.mtu;
         args.dns_addr = config
@@ -322,12 +322,13 @@ mod linux_runtime {
 
     fn create_resolv_conf() -> anyhow::Result<PathBuf> {
         let path = std::env::temp_dir().join(format!("ptun-resolv-{}", std::process::id()));
-        fs::write(
-            &path,
-            "nameserver 198.18.0.1\noptions timeout:1 attempts:1\n",
-        )
-        .with_context(|| format!("failed to write {}", path.display()))?;
+        fs::write(&path, resolv_conf_contents())
+            .with_context(|| format!("failed to write {}", path.display()))?;
         Ok(path)
+    }
+
+    fn resolv_conf_contents() -> &'static str {
+        "nameserver 10.0.0.1\noptions timeout:1 attempts:1\n"
     }
 
     fn exit_like_child(status: WaitStatus) -> ! {
@@ -337,6 +338,17 @@ mod linux_runtime {
             _ => 1,
         };
         std::process::exit(code.clamp(0, 255));
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn resolv_conf_points_to_tun_gateway_not_tun_local_ip() {
+            assert_eq!(
+                super::resolv_conf_contents(),
+                "nameserver 10.0.0.1\noptions timeout:1 attempts:1\n"
+            );
+        }
     }
 }
 

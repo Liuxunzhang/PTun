@@ -34,6 +34,8 @@ Use `-c, --config` to specify a config file, or `--no-config` to disable default
 
 Command-line flags override config file values.
 
+If `dns` is omitted, `ptun` loads the first usable `nameserver` from the host `/etc/resolv.conf`; if none is available it falls back to `1.1.1.1:53`. The target process still sees a private per-namespace resolver, so DNS requests enter the TUN path instead of leaking directly.
+
 Example:
 
 ```toml

@@ -1,4 +1,8 @@
-use std::{fs, net::SocketAddr, path::PathBuf};
+use std::{
+    fs,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::PathBuf,
+};
 
 use anyhow::{Context, anyhow};
 use serde::Deserialize;
@@ -26,6 +30,7 @@ pub struct EffectiveConfig {
     pub config_path: Option<PathBuf>,
     pub proxy: Option<ProxyUrl>,
     pub dns: Option<SocketAddr>,
+    pub dns_source: DnsSource,
     pub tun_name: String,
     pub mtu: u16,
     pub ipv6: bool,
@@ -61,11 +66,20 @@ impl EffectiveConfig {
             .map(|value| value.parse())
             .transpose()?;
 
-        let dns = run
+        let configured_dns = run
             .and_then(|r| r.dns.clone())
             .or(file_config.dns)
             .map(|value| parse_socket_addr("dns", &value))
             .transpose()?;
+        let (dns, dns_source) = match configured_dns {
+            Some(dns) => (Some(dns), DnsSource::Configured),
+            None => system_dns()
+                .map(|dns| (Some(dns), DnsSource::ResolvConf))
+                .unwrap_or((
+                    Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 53)),
+                    DnsSource::Fallback,
+                )),
+        };
 
         let tun_name = run
             .and_then(|r| r.tun_name.clone())
@@ -104,6 +118,7 @@ impl EffectiveConfig {
             config_path,
             proxy,
             dns,
+            dns_source,
             tun_name,
             mtu,
             ipv6,
@@ -111,6 +126,23 @@ impl EffectiveConfig {
             fail_open,
             log_level,
         })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DnsSource {
+    Configured,
+    ResolvConf,
+    Fallback,
+}
+
+impl std::fmt::Display for DnsSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DnsSource::Configured => write!(f, "configured"),
+            DnsSource::ResolvConf => write!(f, "/etc/resolv.conf"),
+            DnsSource::Fallback => write!(f, "fallback"),
+        }
     }
 }
 
@@ -130,6 +162,41 @@ fn parse_socket_addr(field: &str, value: &str) -> anyhow::Result<SocketAddr> {
     value
         .parse()
         .with_context(|| format!("{field} must be host:port socket address, got {value:?}"))
+}
+
+fn system_dns() -> Option<SocketAddr> {
+    let raw = fs::read_to_string("/etc/resolv.conf").ok()?;
+    parse_resolv_conf_dns(&raw)
+}
+
+fn parse_resolv_conf_dns(raw: &str) -> Option<SocketAddr> {
+    let mut loopback = None;
+    for line in raw.lines() {
+        let line = line.split_once('#').map(|(left, _)| left).unwrap_or(line);
+        let mut parts = line.split_whitespace();
+        if parts.next() != Some("nameserver") {
+            continue;
+        }
+        let Some(value) = parts.next() else {
+            continue;
+        };
+        let Ok(ip) = value.parse::<IpAddr>() else {
+            continue;
+        };
+        let addr = SocketAddr::new(ip, 53);
+        if !is_loopback_or_unspecified(ip) {
+            return Some(addr);
+        }
+        loopback.get_or_insert(addr);
+    }
+    loopback
+}
+
+fn is_loopback_or_unspecified(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => ip.is_loopback() || ip.is_unspecified(),
+        IpAddr::V6(ip) => ip.is_loopback() || ip.is_unspecified(),
+    }
 }
 
 fn verbosity_log_level(verbose: u8) -> Option<&'static str> {
@@ -189,6 +256,7 @@ log_level = "warn"
         let config = EffectiveConfig::load(&cli).unwrap();
         assert_eq!(config.proxy.unwrap().scheme(), "http");
         assert_eq!(config.dns.unwrap().to_string(), "8.8.8.8:53");
+        assert_eq!(config.dns_source, DnsSource::Configured);
         assert_eq!(config.tun_name, "from-cli");
         assert_eq!(config.mtu, 1400);
         assert!(config.ipv6);
@@ -259,5 +327,24 @@ ipv6 = true
 
         let config = EffectiveConfig::load(&cli).unwrap();
         assert!(!config.ipv6);
+    }
+
+    #[test]
+    fn parses_resolv_conf_dns_preferring_non_loopback() {
+        let dns = parse_resolv_conf_dns(
+            r#"
+nameserver 127.0.0.53
+nameserver 192.168.0.1
+nameserver 1.1.1.1
+"#,
+        )
+        .unwrap();
+        assert_eq!(dns.to_string(), "192.168.0.1:53");
+    }
+
+    #[test]
+    fn parses_resolv_conf_dns_with_loopback_fallback() {
+        let dns = parse_resolv_conf_dns("nameserver 127.0.0.53\n").unwrap();
+        assert_eq!(dns.to_string(), "127.0.0.53:53");
     }
 }

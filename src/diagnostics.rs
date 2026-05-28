@@ -55,6 +55,7 @@ pub fn doctor(config: &EffectiveConfig) -> anyhow::Result<()> {
             .map(|addr| addr.to_string())
             .unwrap_or_else(|| "system default".to_string())
     );
+    println!("  dns source: {}", config.dns_source);
     println!("  tun name: {}", config.tun_name);
     println!("  mtu: {}", config.mtu);
     println!("  ipv6: {}", yes_no(config.ipv6));
