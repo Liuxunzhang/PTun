@@ -1,0 +1,6 @@
+proxy = "socks5://127.0.0.1:1080"
+dns = "1.1.1.1:53"
+tun_name = "ptun0"
+udp = "auto"
+fail_open = false
+log_level = "info"
