@@ -7,18 +7,17 @@ description = "Per-process transparent proxy launcher for Linux"
 
 [dependencies]
 anyhow = "1.0"
-clap = { version = "4.5", features = ["derive", "env"] }
+clap = { version = "4.5", default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
 dirs = "6.0"
 nix = { version = "0.31", features = ["fs", "mount", "process", "sched", "signal"] }
 serde = { version = "1.0", features = ["derive"] }
-thiserror = "2.0"
-tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "process", "signal", "time"] }
+tokio = { version = "1.52", default-features = false, features = ["rt", "rt-multi-thread", "macros", "time"] }
 toml = "0.9"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "std"] }
 tun = "0.8.8"
-tun2proxy = "0.8"
-url = "2.5"
+tun2proxy = { version = "0.8", default-features = false }
+url = { version = "2.5", default-features = false, features = ["std"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 futures-util = "0.3"
@@ -26,3 +25,10 @@ rtnetlink = "0.21"
 
 [dev-dependencies]
 tempfile = "3.15"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

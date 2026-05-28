@@ -30,6 +30,14 @@ ptun status
 ptun doctor
 ```
 
+## 构建
+
+```sh
+cargo build --release
+```
+
+Release profile 默认开启 LTO、strip、`panic = "abort"` 和小体积优化，生成的 `target/release/ptun` 才是推荐部署的二进制。不要用 debug 构建判断部署体积。
+
 ## 配置文件
 
 默认配置路径：

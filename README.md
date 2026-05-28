@@ -32,6 +32,14 @@ ptun status
 ptun doctor
 ```
 
+## Build
+
+```sh
+cargo build --release
+```
+
+The release profile enables LTO, symbol stripping, `panic = "abort"`, and size-oriented optimization by default. Use `target/release/ptun` for deployment; debug builds are not representative for binary size.
+
 ## Config
 
 Default config path:
