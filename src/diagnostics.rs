@@ -1,4 +1,4 @@
-use std::{net::TcpStream, time::Duration};
+use std::{env, net::TcpStream, time::Duration};
 
 use anyhow::{Context, anyhow};
 
@@ -7,6 +7,7 @@ use crate::{config::EffectiveConfig, linux};
 pub fn check(config: &EffectiveConfig) -> anyhow::Result<()> {
     validate_config(config)?;
     linux::EnvironmentReport::collect().validate_for_run()?;
+    check_runtime_commands(config)?;
     check_proxy_reachable(config)?;
     println!("ptun check: ok");
     Ok(())
@@ -19,7 +20,7 @@ pub fn status(_config: &EffectiveConfig) -> anyhow::Result<()> {
     } else {
         println!("ptun status: active sessions");
         for session in sessions {
-            println!("{session}");
+            println!("{}", session.render());
         }
     }
     Ok(())
@@ -55,8 +56,15 @@ pub fn doctor(config: &EffectiveConfig) -> anyhow::Result<()> {
             .unwrap_or_else(|| "system default".to_string())
     );
     println!("  tun name: {}", config.tun_name);
+    println!("  mtu: {}", config.mtu);
+    println!("  ipv6: {}", yes_no(config.ipv6));
     println!("  udp mode: {:?}", config.udp);
     println!("  fail open: {}", yes_no(config.fail_open));
+    println!("  ip command: {}", yes_no(command_available("ip")));
+    println!(
+        "  iptables command: {}",
+        yes_no(command_available("iptables"))
+    );
 
     if let Err(err) = validate_config(config) {
         println!("  config validation: failed: {err:#}");
@@ -82,7 +90,45 @@ pub fn validate_config(config: &EffectiveConfig) -> anyhow::Result<()> {
     if config.tun_name.trim().is_empty() {
         return Err(anyhow!("tun_name cannot be empty"));
     }
+    if config.mtu < 576 {
+        return Err(anyhow!("mtu must be at least 576"));
+    }
+    if let Some(proxy) = &config.proxy
+        && proxy.scheme() == "http"
+        && matches!(config.udp, crate::cli::UdpMode::On)
+    {
+        return Err(anyhow!(
+            "udp=on is not supported with HTTP proxies; use udp=auto or udp=off"
+        ));
+    }
     Ok(())
+}
+
+fn check_runtime_commands(config: &EffectiveConfig) -> anyhow::Result<()> {
+    if !command_available("ip") {
+        return Err(anyhow!("ip command is required; install iproute2"));
+    }
+    if requires_udp_filter(config) && !command_available("iptables") {
+        return Err(anyhow!(
+            "iptables is required for HTTP proxy mode or udp=off fail-closed filtering"
+        ));
+    }
+    Ok(())
+}
+
+fn requires_udp_filter(config: &EffectiveConfig) -> bool {
+    let http_proxy = config
+        .proxy
+        .as_ref()
+        .map(|proxy| proxy.scheme() == "http")
+        .unwrap_or(false);
+    http_proxy || matches!(config.udp, crate::cli::UdpMode::Off)
+}
+
+fn command_available(command: &str) -> bool {
+    env::var_os("PATH")
+        .map(|paths| env::split_paths(&paths).any(|path| path.join(command).exists()))
+        .unwrap_or(false)
 }
 
 fn check_proxy_reachable(config: &EffectiveConfig) -> anyhow::Result<()> {

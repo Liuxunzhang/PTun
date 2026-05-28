@@ -2,7 +2,7 @@
 
 `ptun` is a Linux-first per-process transparent proxy launcher. It is designed to avoid the `LD_PRELOAD` limitations of tools like proxychains by routing a launched process through a managed network path instead of hooking libc calls.
 
-Current implementation status: the CLI, TOML config loading, config precedence, and diagnostics are implemented. The Linux TUN/network-namespace data plane is scaffolded but not complete yet.
+Current implementation status: `ptun run` creates a private Linux network and mount namespace, mounts a per-process DNS config, creates a TUN device, and runs an embedded `tun2proxy` data plane in the parent namespace.
 
 ## Usage
 
@@ -11,6 +11,7 @@ ptun run -p socks5://127.0.0.1:1080 -- curl https://ifconfig.me
 ptun run --proxy http://127.0.0.1:8080 -- curl https://example.com
 ptun run -c ./ptun.toml -- curl https://example.com
 ptun run -c ./ptun.toml --fail-closed -- curl https://example.com
+ptun run -c ./ptun.toml --no-ipv6 -- curl https://example.com
 ```
 
 Diagnostics:
@@ -39,11 +40,15 @@ Example:
 proxy = "socks5://127.0.0.1:1080"
 dns = "1.1.1.1:53"
 tun_name = "ptun0"
+mtu = 1500
+ipv6 = false
 udp = "auto"
 fail_open = false
 log_level = "info"
 ```
 
-## Requirements
+## Runtime Notes
 
-The intended `run` implementation requires Linux with root or `CAP_NET_ADMIN`, `/dev/net/tun`, and network namespace support.
+`ptun run` requires Linux with root privileges, `/dev/net/tun`, network namespace support, mount namespace support, and the `ip` command from iproute2.
+
+SOCKS5 mode supports TCP and UDP when the upstream proxy supports SOCKS5 UDP. HTTP proxy mode is TCP-only; non-DNS UDP is rejected with an iptables rule so traffic fails closed instead of leaking.

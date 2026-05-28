@@ -44,6 +44,15 @@ pub struct RunArgs {
     #[arg(short = 't', long)]
     pub tun_name: Option<String>,
 
+    #[arg(long)]
+    pub mtu: Option<u16>,
+
+    #[arg(short = '6', long)]
+    pub ipv6: bool,
+
+    #[arg(long, conflicts_with = "ipv6")]
+    pub no_ipv6: bool,
+
     #[arg(short, long, value_enum)]
     pub udp: Option<UdpMode>,
 

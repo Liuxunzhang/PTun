@@ -9,11 +9,15 @@ description = "Per-process transparent proxy launcher for Linux"
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive", "env"] }
 dirs = "6.0"
+nix = { version = "0.31", features = ["fs", "mount", "process", "sched", "signal"] }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
+tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "process", "signal", "time"] }
 toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tun = "0.8.8"
+tun2proxy = "0.8"
 url = "2.5"
 
 [dev-dependencies]
