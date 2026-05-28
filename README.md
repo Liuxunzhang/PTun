@@ -12,6 +12,7 @@ ptun run --proxy http://127.0.0.1:8080 -- curl https://example.com
 ptun run -c ./ptun.toml -- curl https://example.com
 ptun run -c ./ptun.toml --fail-closed -- curl https://example.com
 ptun run -c ./ptun.toml --no-ipv6 -- curl https://example.com
+ptun run -q -- curl https://example.com
 ```
 
 Diagnostics:
@@ -46,6 +47,7 @@ mtu = 1500
 ipv6 = false
 udp = "auto"
 fail_open = false
+quiet = false
 log_level = "info"
 ```
 

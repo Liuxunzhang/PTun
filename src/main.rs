@@ -24,6 +24,10 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn init_logging(config: &config::EffectiveConfig) {
+    if config.quiet {
+        return;
+    }
+
     let filter = config
         .log_level
         .as_deref()

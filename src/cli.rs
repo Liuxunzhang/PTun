@@ -17,6 +17,12 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub log_level: Option<String>,
 
+    #[arg(short, long, global = true)]
+    pub quiet: bool,
+
+    #[arg(long, global = true, conflicts_with = "quiet")]
+    pub no_quiet: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }

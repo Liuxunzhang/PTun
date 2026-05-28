@@ -269,13 +269,17 @@ mod linux_runtime {
             .dns
             .map(|addr| addr.ip())
             .unwrap_or(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)));
-        args.verbosity = match config.log_level.as_deref() {
-            Some("error") => ArgVerbosity::Error,
-            Some("warn") => ArgVerbosity::Warn,
-            Some("debug") => ArgVerbosity::Debug,
-            Some("trace") => ArgVerbosity::Trace,
-            Some("off") => ArgVerbosity::Off,
-            _ => ArgVerbosity::Info,
+        args.verbosity = if config.quiet {
+            ArgVerbosity::Off
+        } else {
+            match config.log_level.as_deref() {
+                Some("error") => ArgVerbosity::Error,
+                Some("warn") => ArgVerbosity::Warn,
+                Some("debug") => ArgVerbosity::Debug,
+                Some("trace") => ArgVerbosity::Trace,
+                Some("off") => ArgVerbosity::Off,
+                _ => ArgVerbosity::Info,
+            }
         };
         args
     }

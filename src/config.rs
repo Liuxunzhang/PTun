@@ -22,6 +22,7 @@ pub struct FileConfig {
     pub ipv6: Option<bool>,
     pub udp: Option<UdpMode>,
     pub fail_open: Option<bool>,
+    pub quiet: Option<bool>,
     pub log_level: Option<String>,
 }
 
@@ -36,6 +37,7 @@ pub struct EffectiveConfig {
     pub ipv6: bool,
     pub udp: UdpMode,
     pub fail_open: bool,
+    pub quiet: bool,
     pub log_level: Option<String>,
 }
 
@@ -108,10 +110,17 @@ impl EffectiveConfig {
             _ => file_config.fail_open.unwrap_or(false),
         };
 
+        let quiet = match (cli.quiet, cli.no_quiet) {
+            (true, _) => true,
+            (_, true) => false,
+            _ => file_config.quiet.unwrap_or(false),
+        };
+
         let log_level = cli
             .log_level
             .clone()
             .or(file_config.log_level)
+            .or_else(|| quiet.then(|| "off".to_string()))
             .or_else(|| verbosity_log_level(cli.verbose).map(str::to_string));
 
         Ok(Self {
@@ -124,6 +133,7 @@ impl EffectiveConfig {
             ipv6,
             udp,
             fail_open,
+            quiet,
             log_level,
         })
     }
@@ -229,6 +239,7 @@ mtu = 1400
 ipv6 = true
 udp = "off"
 fail_open = false
+quiet = false
 log_level = "warn"
 "#,
         )
@@ -262,6 +273,7 @@ log_level = "warn"
         assert!(config.ipv6);
         assert_eq!(config.udp, UdpMode::On);
         assert!(config.fail_open);
+        assert!(!config.quiet);
     }
 
     #[test]
@@ -327,6 +339,61 @@ ipv6 = true
 
         let config = EffectiveConfig::load(&cli).unwrap();
         assert!(!config.ipv6);
+    }
+
+    #[test]
+    fn quiet_sets_log_level_off() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        fs::write(
+            temp.path(),
+            r#"
+proxy = "socks5://127.0.0.1:1080"
+quiet = true
+"#,
+        )
+        .unwrap();
+
+        let cli = Cli::parse_from([
+            "ptun",
+            "-c",
+            temp.path().to_str().unwrap(),
+            "run",
+            "--",
+            "curl",
+            "https://example.com",
+        ]);
+
+        let config = EffectiveConfig::load(&cli).unwrap();
+        assert!(config.quiet);
+        assert_eq!(config.log_level.as_deref(), Some("off"));
+    }
+
+    #[test]
+    fn cli_can_override_quiet_to_false() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        fs::write(
+            temp.path(),
+            r#"
+proxy = "socks5://127.0.0.1:1080"
+quiet = true
+"#,
+        )
+        .unwrap();
+
+        let cli = Cli::parse_from([
+            "ptun",
+            "-c",
+            temp.path().to_str().unwrap(),
+            "--no-quiet",
+            "run",
+            "--",
+            "curl",
+            "https://example.com",
+        ]);
+
+        let config = EffectiveConfig::load(&cli).unwrap();
+        assert!(!config.quiet);
+        assert_eq!(config.log_level, None);
     }
 
     #[test]

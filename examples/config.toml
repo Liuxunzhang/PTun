@@ -5,4 +5,5 @@ mtu = 1500
 ipv6 = false
 udp = "auto"
 fail_open = false
+quiet = false
 log_level = "info"

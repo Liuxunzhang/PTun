@@ -61,6 +61,7 @@ pub fn doctor(config: &EffectiveConfig) -> anyhow::Result<()> {
     println!("  ipv6: {}", yes_no(config.ipv6));
     println!("  udp mode: {:?}", config.udp);
     println!("  fail open: {}", yes_no(config.fail_open));
+    println!("  quiet: {}", yes_no(config.quiet));
     println!("  ip command: {}", yes_no(command_available("ip")));
     println!(
         "  iptables command: {}",
