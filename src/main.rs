@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod diagnostics;
+mod dns_cache;
 mod linux;
 mod packet;
 mod proxy;

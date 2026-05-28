@@ -14,6 +14,7 @@ mod linux_runtime {
     };
 
     use anyhow::{Context, anyhow, bail};
+    use futures_util::stream::TryStreamExt;
     use nix::{
         fcntl::OFlag,
         mount::{MsFlags, mount},
@@ -27,7 +28,7 @@ mod linux_runtime {
     use crate::{
         cli::{RunArgs, UdpMode},
         config::EffectiveConfig,
-        diagnostics, linux,
+        diagnostics, dns_cache, linux,
     };
 
     const TUN_ADDR: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 33);
@@ -87,16 +88,25 @@ mod linux_runtime {
             .with_context(|| format!("failed to open child network namespace {child_ns_path}"))?;
 
         setns(&child_ns, CloneFlags::CLONE_NEWNET).context("failed to enter child netns")?;
-        let tun_fd_result = setup_target_namespace(config, &proxy_arg);
+        let setup_result = setup_target_namespace(config, &proxy_arg);
         let restore_result = setns(&original_ns, CloneFlags::CLONE_NEWNET)
             .context("failed to restore original netns");
-        let tun_fd = tun_fd_result?;
+        let setup = setup_result?;
         restore_result?;
 
         let _ = fs::remove_file(resolv_path);
 
         let shutdown = tun2proxy::CancellationToken::new();
-        let proxy_thread = start_proxy_thread(tun_fd, proxy_arg, config, shutdown.clone())?;
+        let proxy_thread = start_proxy_thread(setup.tun_fd, proxy_arg, config, shutdown.clone())?;
+        let dns_cache = match (setup.dns_socket, config.dns, config.proxy.clone()) {
+            (Some(socket), Some(dns), Some(proxy)) => Some(dns_cache::DnsCacheHandle::spawn(
+                socket,
+                dns,
+                proxy,
+                config.quiet,
+            )?),
+            _ => None,
+        };
 
         write(&go_write, &[1]).context("failed to release child process")?;
         drop(go_write);
@@ -114,6 +124,9 @@ mod linux_runtime {
         let session_path = linux::write_session(&session)?;
         let status = waitpid(child, None).context("failed to wait for target process")?;
 
+        if let Some(dns_cache) = dns_cache {
+            dns_cache.shutdown();
+        }
         shutdown.cancel();
         let proxy_result = proxy_thread
             .join()
@@ -184,18 +197,24 @@ mod linux_runtime {
         Ok(())
     }
 
-    fn setup_target_namespace(config: &EffectiveConfig, proxy: &ArgProxy) -> anyhow::Result<i32> {
+    struct NamespaceSetup {
+        tun_fd: i32,
+        dns_socket: Option<std::net::UdpSocket>,
+    }
+
+    fn setup_target_namespace(
+        config: &EffectiveConfig,
+        proxy: &ArgProxy,
+    ) -> anyhow::Result<NamespaceSetup> {
         let tun_fd = create_tun(config)?;
-        run_ip(["link", "set", "lo", "up"])?;
-        run_ip(["addr", "replace", "10.0.0.33/24", "dev", &config.tun_name])?;
-        run_ip(["link", "set", "dev", &config.tun_name, "up"])?;
-        run_ip(["route", "replace", "default", "dev", &config.tun_name])?;
+        configure_namespace_netlink(config)?;
+        let dns_socket = bind_dns_cache_socket().ok();
 
         if should_block_udp(config, proxy.proxy_type) {
             add_udp_reject_rule()?;
         }
 
-        Ok(tun_fd)
+        Ok(NamespaceSetup { tun_fd, dns_socket })
     }
 
     fn create_tun(config: &EffectiveConfig) -> anyhow::Result<i32> {
@@ -304,15 +323,86 @@ mod linux_runtime {
         }
     }
 
-    fn run_ip<const N: usize>(args: [&str; N]) -> anyhow::Result<()> {
-        let status = Command::new("ip")
-            .args(args)
-            .status()
-            .context("failed to run ip; install iproute2")?;
-        if !status.success() {
-            bail!("ip command failed with status {status}");
+    fn configure_namespace_netlink(config: &EffectiveConfig) -> anyhow::Result<()> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("failed to build netlink runtime")?;
+        rt.block_on(async {
+            let (connection, handle, _) =
+                rtnetlink::new_connection().context("failed to open rtnetlink connection")?;
+            tokio::spawn(connection);
+
+            let lo_index = link_index(&handle, "lo").await?;
+            let tun_index = link_index(&handle, &config.tun_name).await?;
+
+            set_link_up(&handle, lo_index).await?;
+            add_addr_ignore_exists(&handle, lo_index, IpAddr::V4(TUN_GATEWAY), 32).await?;
+            add_addr_ignore_exists(&handle, tun_index, IpAddr::V4(TUN_ADDR), 24).await?;
+            set_link_up(&handle, tun_index).await?;
+            add_default_route_ignore_exists(&handle, tun_index).await?;
+            Ok::<_, anyhow::Error>(())
+        })
+    }
+
+    async fn link_index(handle: &rtnetlink::Handle, name: &str) -> anyhow::Result<u32> {
+        let link = handle
+            .link()
+            .get()
+            .match_name(name.to_string())
+            .execute()
+            .try_next()
+            .await
+            .with_context(|| format!("failed to query link {name}"))?
+            .ok_or_else(|| anyhow!("link not found: {name}"))?;
+        Ok(link.header.index)
+    }
+
+    async fn set_link_up(handle: &rtnetlink::Handle, index: u32) -> anyhow::Result<()> {
+        let msg = rtnetlink::LinkMessageBuilder::<rtnetlink::LinkUnspec>::new()
+            .index(index)
+            .up()
+            .build();
+        ignore_exists_or_execute(handle.link().set(msg).execute().await)
+    }
+
+    async fn add_addr_ignore_exists(
+        handle: &rtnetlink::Handle,
+        index: u32,
+        addr: IpAddr,
+        prefix_len: u8,
+    ) -> anyhow::Result<()> {
+        ignore_exists_or_execute(
+            handle
+                .address()
+                .add(index, addr, prefix_len)
+                .execute()
+                .await,
+        )
+    }
+
+    async fn add_default_route_ignore_exists(
+        handle: &rtnetlink::Handle,
+        tun_index: u32,
+    ) -> anyhow::Result<()> {
+        let route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::new()
+            .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
+            .output_interface(tun_index)
+            .build();
+        ignore_exists_or_execute(handle.route().add(route).execute().await)
+    }
+
+    fn ignore_exists_or_execute(result: Result<(), rtnetlink::Error>) -> anyhow::Result<()> {
+        match result {
+            Ok(()) => Ok(()),
+            Err(err) if format!("{err}").contains("File exists") => Ok(()),
+            Err(err) => Err(anyhow!("netlink operation failed: {err}")),
         }
-        Ok(())
+    }
+
+    fn bind_dns_cache_socket() -> anyhow::Result<std::net::UdpSocket> {
+        std::net::UdpSocket::bind((TUN_GATEWAY, 53))
+            .with_context(|| format!("failed to bind DNS cache on {TUN_GATEWAY}:53"))
     }
 
     fn wait_for_child_ready(fd: &OwnedFd) -> anyhow::Result<()> {

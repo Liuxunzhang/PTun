@@ -66,7 +66,7 @@ pub fn doctor(config: &EffectiveConfig) -> anyhow::Result<()> {
     println!("  udp mode: {:?}", config.udp);
     println!("  fail open: {}", yes_no(config.fail_open));
     println!("  quiet: {}", yes_no(config.quiet));
-    println!("  ip command: {}", yes_no(command_available("ip")));
+    println!("  netlink setup: yes");
     println!(
         "  iptables command: {}",
         yes_no(command_available("iptables"))
@@ -111,9 +111,6 @@ pub fn validate_config(config: &EffectiveConfig) -> anyhow::Result<()> {
 }
 
 fn check_runtime_commands(config: &EffectiveConfig) -> anyhow::Result<()> {
-    if !command_available("ip") {
-        return Err(anyhow!("ip command is required; install iproute2"));
-    }
     if requires_udp_filter(config) && !command_available("iptables") {
         return Err(anyhow!(
             "iptables is required for HTTP proxy mode or udp=off fail-closed filtering"

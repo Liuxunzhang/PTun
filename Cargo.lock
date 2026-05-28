@@ -1406,12 +1406,14 @@ dependencies = [
 
 [[package]]
 name = "ptun"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
  "dirs",
+ "futures-util",
  "nix 0.31.3",
+ "rtnetlink",
  "serde",
  "tempfile",
  "thiserror 2.0.18",
